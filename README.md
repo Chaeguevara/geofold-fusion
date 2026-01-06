@@ -50,7 +50,7 @@ Currently implemented:
 2. Go to **Tools** → **Add-Ins** → **Scripts and Add-Ins**
 3. Click the **+** button and navigate to `scripts/fusion360/create_hexagon.py`
 4. Click **Run**
-5. A hexagon will be created in your active design!
+5. A 3D hexagon with rounded edges will be created in your active design!
 
 ## Project Structure
 
@@ -71,10 +71,12 @@ geofold-fusion/
 
 Located in `scripts/fusion360/`:
 
-1. **create_hexagon.py** - Creates regular hexagons (육각형)
-   - Customizable side length
-   - Configurable position
-   - Predefined size presets (small, medium, large)
+1. **create_hexagon.py** - Creates 3D regular hexagons (육각형) with optional edge rounding
+   - **Adjustable radius**: Control hexagon size (circumradius)
+   - **Edge rounding**: Optional fillets on vertical corners
+   - **Adjustable thickness**: Control extrusion height
+   - Configurable position (X, Y, Z)
+   - Predefined size presets (small, medium, large, with rounded or sharp variants)
    - See [detailed documentation](scripts/fusion360/README.md)
 
 ## Roadmap
@@ -82,7 +84,9 @@ Located in `scripts/fusion360/`:
 Planned features and algorithms:
 
 ### Phase 1: Basic Shapes ✅ (In Progress)
-- [x] Regular hexagon generation
+- [x] Regular hexagon generation with adjustable radius
+- [x] 3D extrusion with configurable thickness
+- [x] Edge rounding (fillet) support
 - [ ] Regular polygon generation (n-gons)
 - [ ] Star polygons
 - [ ] Tessellation patterns
@@ -95,9 +99,9 @@ Planned features and algorithms:
 - [ ] Yoshimura pattern
 
 ### Phase 3: 3D Transformations
-- [ ] 2D to 3D extrusion
-- [ ] Fold simulation
-- [ ] Thickness modeling for paper
+- [x] 2D to 3D extrusion (completed for hexagons)
+- [x] Thickness modeling for paper (basic implementation)
+- [ ] Fold simulation with dynamic angles
 - [ ] Assembly constraints
 
 ### Phase 4: Advanced Paperfolding
@@ -168,7 +172,7 @@ git push -u origin feature/my-new-feature
 
 ```python
 # In Fusion 360, run create_hexagon.py
-# Default creates a 10cm hexagon at origin
+# Default creates a 10cm radius hexagon with 0.5cm thickness and rounded edges
 ```
 
 ### Creating a Custom Hexagon
@@ -178,7 +182,9 @@ Edit the script's `run()` function:
 ```python
 hexagon_component = create_hexagon(
     design=design,
-    side_length=15.0,
+    radius=15.0,           # 15cm radius
+    thickness=1.0,         # 1cm thick
+    fillet_radius=0.8,     # 0.8cm edge rounding
     center_x=5.0,
     center_y=5.0,
     component_name="Custom_Hexagon"
@@ -188,8 +194,21 @@ hexagon_component = create_hexagon(
 ### Using Presets
 
 ```python
-# Create a large hexagon (20cm sides)
+# Create a large hexagon with rounded edges (20cm radius)
 hexagon = create_hexagon_from_preset(design, preset_name='large')
+
+# Create a medium hexagon with sharp corners (10cm radius)
+hexagon_sharp = create_hexagon_from_preset(design, preset_name='medium_sharp')
+```
+
+### Controlling Edge Rounding
+
+```python
+# Sharp corners (no rounding)
+sharp = create_hexagon(design, radius=10.0, fillet_radius=0.0)
+
+# Smooth rounded corners
+rounded = create_hexagon(design, radius=10.0, fillet_radius=1.0)
 ```
 
 ## Resources

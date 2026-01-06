@@ -14,6 +14,171 @@ import traceback
 import math
 
 
+# ============================================================================
+# Helper Functions (Internal)
+# ============================================================================
+
+def _calculate_hexagon_vertices(
+    radius: float,
+    center_x: float,
+    center_y: float,
+    center_z: float
+) -> list:
+    """
+    Calculate the vertices of a regular hexagon.
+
+    Args:
+        radius: Radius from center to vertex (circumradius)
+        center_x: X coordinate of center
+        center_y: Y coordinate of center
+        center_z: Z coordinate of center
+
+    Returns:
+        List of Point3D objects representing the hexagon vertices
+    """
+    vertices = []
+    for i in range(6):
+        # Calculate angle for this vertex (starting from 0 degrees, counterclockwise)
+        angle = math.radians(60 * i)
+
+        # Calculate vertex coordinates using polar to cartesian conversion
+        x = center_x + radius * math.cos(angle)
+        y = center_y + radius * math.sin(angle)
+
+        vertices.append(adsk.core.Point3D.create(x, y, center_z))
+
+    return vertices
+
+
+def _create_hexagon_sketch(
+    component: adsk.fusion.Component,
+    vertices: list,
+    center_x: float,
+    center_y: float,
+    center_z: float,
+    sketch_name: str
+) -> adsk.fusion.Sketch:
+    """
+    Create a hexagon sketch from vertices.
+
+    Args:
+        component: The component to add the sketch to
+        vertices: List of Point3D objects for hexagon vertices
+        center_x: X coordinate of center (for reference point)
+        center_y: Y coordinate of center (for reference point)
+        center_z: Z coordinate of center (for reference point)
+        sketch_name: Name for the sketch
+
+    Returns:
+        The created sketch object
+    """
+    # Create sketch on XY plane
+    xy_plane = component.xYConstructionPlane
+    sketch = component.sketches.add(xy_plane)
+    sketch.name = sketch_name
+
+    # Draw hexagon using lines
+    lines = sketch.sketchCurves.sketchLines
+    for i in range(6):
+        start_point = vertices[i]
+        end_point = vertices[(i + 1) % 6]  # Wrap around to first vertex
+        lines.addByTwoPoints(start_point, end_point)
+
+    # Add center point for reference
+    sketch.sketchPoints.add(adsk.core.Point3D.create(center_x, center_y, center_z))
+
+    return sketch
+
+
+def _extrude_sketch_profile(
+    component: adsk.fusion.Component,
+    sketch: adsk.fusion.Sketch,
+    thickness: float
+) -> adsk.fusion.ExtrudeFeature:
+    """
+    Extrude the sketch profile to create a 3D body.
+
+    Args:
+        component: The component containing the sketch
+        sketch: The sketch to extrude
+        thickness: Extrusion thickness in cm
+
+    Returns:
+        The created extrude feature
+
+    Raises:
+        Exception: If no valid profile is found in the sketch
+    """
+    # Find the closed profile (should be the hexagon)
+    profile = None
+    for prof in sketch.profiles:
+        profile = prof
+        break
+
+    if not profile:
+        raise Exception("Failed to find hexagon profile for extrusion")
+
+    # Create extrusion
+    extrudes = component.features.extrudeFeatures
+    extrude_input = extrudes.createInput(
+        profile,
+        adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+    )
+
+    # Set extrusion distance
+    distance = adsk.core.ValueInput.createByReal(thickness)
+    extrude_input.setDistanceExtent(False, distance)
+
+    # Create the extrusion feature
+    return extrudes.add(extrude_input)
+
+
+def _apply_edge_fillets(
+    component: adsk.fusion.Component,
+    body: adsk.fusion.BRepBody,
+    fillet_radius: float
+) -> None:
+    """
+    Apply fillets to the vertical edges of a body.
+
+    Args:
+        component: The component containing the body
+        body: The body to apply fillets to
+        fillet_radius: Radius of the fillet in cm
+    """
+    if fillet_radius <= 0:
+        return  # No fillet needed
+
+    # Collect vertical edges (parallel to Z axis)
+    edges_to_fillet = adsk.core.ObjectCollection.create()
+
+    for edge in body.edges:
+        geom = edge.geometry
+        if hasattr(geom, 'direction'):
+            direction = geom.direction
+            # Check if edge is vertical (direction parallel to Z axis)
+            # Vertical edges have direction close to (0, 0, ±1)
+            if abs(direction.x) < 0.01 and abs(direction.y) < 0.01:
+                edges_to_fillet.add(edge)
+
+    # Apply fillet if we found vertical edges
+    if edges_to_fillet.count > 0:
+        fillets = component.features.filletFeatures
+        fillet_input = fillets.createInput()
+        fillet_input.addConstantRadiusEdgeSet(
+            edges_to_fillet,
+            adsk.core.ValueInput.createByReal(fillet_radius),
+            True
+        )
+        fillet_input.isG2 = False
+        fillet_input.isRollingBallCorner = True
+        fillets.add(fillet_input)
+
+
+# ============================================================================
+# Main Public Functions
+# ============================================================================
+
 def create_hexagon(
     design: adsk.fusion.Design,
     radius: float = 10.0,
@@ -49,103 +214,32 @@ def create_hexagon(
         - Thickness determines the height of the extruded 3D shape
     """
     try:
-        # Get the root component
+        # Create new component
         root_comp = design.rootComponent
-
-        # Create a new component for the hexagon
         occurrence = root_comp.occurrences.addNewComponent(adsk.core.Matrix3D.create())
         component = occurrence.component
         component.name = component_name
 
-        # Get the XY plane
-        xy_plane = component.xYConstructionPlane
-
-        # Create a new sketch on the XY plane
-        sketches = component.sketches
-        sketch = sketches.add(xy_plane)
-        sketch.name = f"{component_name}_Sketch"
-
         # Calculate hexagon vertices
-        # A regular hexagon has 6 vertices equally spaced around a circle
-        # The circumradius (center to vertex) is used as the radius parameter
-        vertices = []
+        vertices = _calculate_hexagon_vertices(radius, center_x, center_y, center_z)
 
-        for i in range(6):
-            # Calculate angle for this vertex (starting from 0 degrees, going counterclockwise)
-            angle = math.radians(60 * i)
+        # Create hexagon sketch
+        sketch = _create_hexagon_sketch(
+            component,
+            vertices,
+            center_x,
+            center_y,
+            center_z,
+            f"{component_name}_Sketch"
+        )
 
-            # Calculate vertex coordinates
-            x = center_x + radius * math.cos(angle)
-            y = center_y + radius * math.sin(angle)
+        # Extrude to create 3D body
+        extrude_feature = _extrude_sketch_profile(component, sketch, thickness)
 
-            vertices.append(adsk.core.Point3D.create(x, y, center_z))
-
-        # Draw the hexagon using lines
-        lines = sketch.sketchCurves.sketchLines
-        sketch_lines = []
-
-        # Connect all vertices to form the hexagon
-        for i in range(6):
-            start_point = vertices[i]
-            end_point = vertices[(i + 1) % 6]  # Wrap around to first vertex
-            line = lines.addByTwoPoints(start_point, end_point)
-            sketch_lines.append(line)
-
-        # Add a center point for reference
-        sketch.sketchPoints.add(adsk.core.Point3D.create(center_x, center_y, center_z))
-
-        # Find the profile for extrusion
-        # The sketch should have one closed profile (the hexagon)
-        profile = None
-        for prof in sketch.profiles:
-            profile = prof
-            break
-
-        if not profile:
-            raise Exception("Failed to find hexagon profile for extrusion")
-
-        # Create extrusion to make it a 3D body
-        extrudes = component.features.extrudeFeatures
-        extrude_input = extrudes.createInput(profile, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
-
-        # Set the extrusion distance
-        distance = adsk.core.ValueInput.createByReal(thickness)
-        extrude_input.setDistanceExtent(False, distance)
-
-        # Create the extrusion
-        extrude_feature = extrudes.add(extrude_input)
-
-        # Apply fillets to the vertical edges if fillet_radius > 0
+        # Apply fillets to vertical edges if requested
         if fillet_radius > 0:
-            # Get the body created by extrusion
             body = extrude_feature.bodies.item(0)
-
-            # Collect the vertical edges (the edges at the corners)
-            edges_to_fillet = adsk.core.ObjectCollection.create()
-
-            for edge in body.edges:
-                # Vertical edges are perpendicular to the XY plane
-                # Check if the edge is vertical (parallel to Z axis)
-                geom = edge.geometry
-                if hasattr(geom, 'direction'):
-                    direction = geom.direction
-                    # Check if edge is vertical (direction parallel to Z axis)
-                    # An edge is vertical if its direction is close to (0, 0, ±1)
-                    if abs(direction.x) < 0.01 and abs(direction.y) < 0.01:
-                        edges_to_fillet.add(edge)
-
-            # Apply fillet if we found edges
-            if edges_to_fillet.count > 0:
-                fillets = component.features.filletFeatures
-                fillet_input = fillets.createInput()
-                fillet_input.addConstantRadiusEdgeSet(
-                    edges_to_fillet,
-                    adsk.core.ValueInput.createByReal(fillet_radius),
-                    True
-                )
-                fillet_input.isG2 = False
-                fillet_input.isRollingBallCorner = True
-                fillets.add(fillet_input)
+            _apply_edge_fillets(component, body, fillet_radius)
 
         return component
 
@@ -204,7 +298,10 @@ def run(context):
             ui.messageBox(f'Failed:\n{traceback.format_exc()}')
 
 
-# Configuration for parameterized hexagon creation
+# ============================================================================
+# Configuration and Preset Support
+# ============================================================================
+
 class HexagonConfig:
     """
     Configuration class for creating hexagons with different parameters.

@@ -16,28 +16,37 @@ import math
 
 def create_hexagon(
     design: adsk.fusion.Design,
-    side_length: float = 10.0,
+    radius: float = 10.0,
     center_x: float = 0.0,
     center_y: float = 0.0,
     center_z: float = 0.0,
+    thickness: float = 0.5,
+    fillet_radius: float = 0.0,
     component_name: str = "Hexagon"
 ) -> adsk.fusion.Component:
     """
-    Creates a regular hexagon sketch in Fusion 360.
+    Creates a regular hexagon with optional edge rounding in Fusion 360.
 
     Args:
         design: The active Fusion 360 design
-        side_length: Length of each side of the hexagon in cm (default: 10.0)
+        radius: Radius from center to vertex (circumradius) in cm (default: 10.0)
         center_x: X coordinate of the hexagon center (default: 0.0)
         center_y: Y coordinate of the hexagon center (default: 0.0)
         center_z: Z coordinate of the hexagon center (default: 0.0)
+        thickness: Extrusion thickness in cm (default: 0.5)
+        fillet_radius: Radius for edge rounding in cm, 0 for no rounding (default: 0.0)
         component_name: Name of the component to create (default: "Hexagon")
 
     Returns:
-        The created component containing the hexagon sketch
+        The created component containing the hexagon body
 
     Raises:
         Exception: If hexagon creation fails
+
+    Note:
+        - For a regular hexagon, side_length = radius (when radius is the circumradius)
+        - Set fillet_radius > 0 to round the vertical edges at corners
+        - Thickness determines the height of the extruded 3D shape
     """
     try:
         # Get the root component
@@ -58,8 +67,7 @@ def create_hexagon(
 
         # Calculate hexagon vertices
         # A regular hexagon has 6 vertices equally spaced around a circle
-        # The radius of the circumscribed circle equals the side length
-        radius = side_length
+        # The circumradius (center to vertex) is used as the radius parameter
         vertices = []
 
         for i in range(6):
@@ -74,15 +82,70 @@ def create_hexagon(
 
         # Draw the hexagon using lines
         lines = sketch.sketchCurves.sketchLines
+        sketch_lines = []
 
         # Connect all vertices to form the hexagon
         for i in range(6):
             start_point = vertices[i]
             end_point = vertices[(i + 1) % 6]  # Wrap around to first vertex
-            lines.addByTwoPoints(start_point, end_point)
+            line = lines.addByTwoPoints(start_point, end_point)
+            sketch_lines.append(line)
 
         # Add a center point for reference
         sketch.sketchPoints.add(adsk.core.Point3D.create(center_x, center_y, center_z))
+
+        # Find the profile for extrusion
+        # The sketch should have one closed profile (the hexagon)
+        profile = None
+        for prof in sketch.profiles:
+            profile = prof
+            break
+
+        if not profile:
+            raise Exception("Failed to find hexagon profile for extrusion")
+
+        # Create extrusion to make it a 3D body
+        extrudes = component.features.extrudeFeatures
+        extrude_input = extrudes.createInput(profile, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+
+        # Set the extrusion distance
+        distance = adsk.core.ValueInput.createByReal(thickness)
+        extrude_input.setDistanceExtent(False, distance)
+
+        # Create the extrusion
+        extrude_feature = extrudes.add(extrude_input)
+
+        # Apply fillets to the vertical edges if fillet_radius > 0
+        if fillet_radius > 0:
+            # Get the body created by extrusion
+            body = extrude_feature.bodies.item(0)
+
+            # Collect the vertical edges (the edges at the corners)
+            edges_to_fillet = adsk.core.ObjectCollection.create()
+
+            for edge in body.edges:
+                # Vertical edges are perpendicular to the XY plane
+                # Check if the edge is vertical (parallel to Z axis)
+                geom = edge.geometry
+                if hasattr(geom, 'direction'):
+                    direction = geom.direction
+                    # Check if edge is vertical (direction parallel to Z axis)
+                    # An edge is vertical if its direction is close to (0, 0, ±1)
+                    if abs(direction.x) < 0.01 and abs(direction.y) < 0.01:
+                        edges_to_fillet.add(edge)
+
+            # Apply fillet if we found edges
+            if edges_to_fillet.count > 0:
+                fillets = component.features.filletFeatures
+                fillet_input = fillets.createInput()
+                fillet_input.addConstantRadiusEdgeSet(
+                    edges_to_fillet,
+                    adsk.core.ValueInput.createByReal(fillet_radius),
+                    True
+                )
+                fillet_input.isG2 = False
+                fillet_input.isRollingBallCorner = True
+                fillets.add(fillet_input)
 
         return component
 
@@ -115,10 +178,12 @@ def run(context):
         # You can modify these parameters as needed
         hexagon_component = create_hexagon(
             design=design,
-            side_length=10.0,  # 10 cm side length
+            radius=10.0,         # 10 cm radius (center to vertex)
             center_x=0.0,
             center_y=0.0,
             center_z=0.0,
+            thickness=0.5,       # 0.5 cm thickness
+            fillet_radius=0.5,   # 0.5 cm edge rounding
             component_name="Hexagon_Base"
         )
 
@@ -128,7 +193,9 @@ def run(context):
         ui.messageBox(
             f'Hexagon created successfully!\n\n'
             f'Component: {hexagon_component.name}\n'
-            f'Side length: 10.0 cm\n'
+            f'Radius: 10.0 cm\n'
+            f'Thickness: 0.5 cm\n'
+            f'Edge rounding: 0.5 cm\n\n'
             f'This hexagon can now be used for paperfolding operations.'
         )
 
@@ -148,35 +215,43 @@ class HexagonConfig:
 
     def __init__(
         self,
-        side_length: float = 10.0,
+        radius: float = 10.0,
         center_x: float = 0.0,
         center_y: float = 0.0,
         center_z: float = 0.0,
+        thickness: float = 0.5,
+        fillet_radius: float = 0.0,
         component_name: str = "Hexagon"
     ):
         """
         Initialize hexagon configuration.
 
         Args:
-            side_length: Length of each side in cm
+            radius: Radius from center to vertex in cm
             center_x: X coordinate of center
             center_y: Y coordinate of center
             center_z: Z coordinate of center
+            thickness: Extrusion thickness in cm
+            fillet_radius: Edge rounding radius in cm (0 for no rounding)
             component_name: Name for the component
         """
-        self.side_length = side_length
+        self.radius = radius
         self.center_x = center_x
         self.center_y = center_y
         self.center_z = center_z
+        self.thickness = thickness
+        self.fillet_radius = fillet_radius
         self.component_name = component_name
 
     def to_dict(self):
         """Convert configuration to dictionary."""
         return {
-            'side_length': self.side_length,
+            'radius': self.radius,
             'center_x': self.center_x,
             'center_y': self.center_y,
             'center_z': self.center_z,
+            'thickness': self.thickness,
+            'fillet_radius': self.fillet_radius,
             'component_name': self.component_name
         }
 
@@ -188,9 +263,42 @@ class HexagonConfig:
 
 # Predefined hexagon configurations for common paperfolding patterns
 PRESET_CONFIGS = {
-    'small': HexagonConfig(side_length=5.0, component_name="Hexagon_Small"),
-    'medium': HexagonConfig(side_length=10.0, component_name="Hexagon_Medium"),
-    'large': HexagonConfig(side_length=20.0, component_name="Hexagon_Large"),
+    'small': HexagonConfig(
+        radius=5.0,
+        thickness=0.3,
+        fillet_radius=0.3,
+        component_name="Hexagon_Small"
+    ),
+    'medium': HexagonConfig(
+        radius=10.0,
+        thickness=0.5,
+        fillet_radius=0.5,
+        component_name="Hexagon_Medium"
+    ),
+    'large': HexagonConfig(
+        radius=20.0,
+        thickness=1.0,
+        fillet_radius=1.0,
+        component_name="Hexagon_Large"
+    ),
+    'small_sharp': HexagonConfig(
+        radius=5.0,
+        thickness=0.3,
+        fillet_radius=0.0,
+        component_name="Hexagon_Small_Sharp"
+    ),
+    'medium_sharp': HexagonConfig(
+        radius=10.0,
+        thickness=0.5,
+        fillet_radius=0.0,
+        component_name="Hexagon_Medium_Sharp"
+    ),
+    'large_sharp': HexagonConfig(
+        radius=20.0,
+        thickness=1.0,
+        fillet_radius=0.0,
+        component_name="Hexagon_Large_Sharp"
+    ),
 }
 
 
@@ -203,7 +311,13 @@ def create_hexagon_from_preset(
 
     Args:
         design: The active Fusion 360 design
-        preset_name: Name of the preset ('small', 'medium', or 'large')
+        preset_name: Name of the preset. Available options:
+            - 'small': 5cm radius with rounded edges
+            - 'medium': 10cm radius with rounded edges (default)
+            - 'large': 20cm radius with rounded edges
+            - 'small_sharp': 5cm radius with sharp corners
+            - 'medium_sharp': 10cm radius with sharp corners
+            - 'large_sharp': 20cm radius with sharp corners
 
     Returns:
         The created component

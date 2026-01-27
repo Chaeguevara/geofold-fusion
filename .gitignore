@@ -64,6 +64,7 @@ logs/
 coverage/
 .nyc_output/
 .pytest_cache/
+.mypy_cache/
 
 # Build outputs
 dist/
